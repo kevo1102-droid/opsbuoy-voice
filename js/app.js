@@ -319,6 +319,10 @@ async function predownload() {
 
 // Wire up
 function init() {
+  // Defensive: force both modals hidden on boot, regardless of any stale state.
+  $('#transcribe-overlay').hidden = true;
+  $('#settings-modal').hidden = true;
+
   $('#fab').addEventListener('click', startRecording);
   $('#record-stop').addEventListener('click', stopRecording);
   $('#record-cancel').addEventListener('click', cancelRecording);
