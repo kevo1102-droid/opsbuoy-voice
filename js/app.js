@@ -187,7 +187,7 @@ async function startRecording({ long = false } = {}) {
     return;
   }
   recorder = new Recorder();
-  longSession = long ? { chunks: [], transcripts: [], startedAt: Date.now(), pending: 0 } : null;
+  longSession = long ? { chunks: [], transcripts: [], startedAt: Date.now(), pending: 0, failed: 0, lastError: '' } : null;
 
   try {
     await recorder.start(long ? {
@@ -226,18 +226,19 @@ async function handleLongChunk({ index, blob, mimeType, final }) {
   if (!longSession) return;
   longSession.chunks.push(blob);
   longSession.pending++;
-  const doneCount = longSession.transcripts.filter((t) => t != null).length;
-  $('#record-chunk-count').textContent = `${doneCount}/${longSession.chunks.length}`;
+  $('#record-chunk-count').textContent = `${longSession.chunks.length - longSession.pending}/${longSession.chunks.length}`;
   try {
     const text = await transcribe(blob);
     longSession.transcripts[index] = text || '';
+    if (!text) longSession.failed++;
   } catch (e) {
     console.error('[long chunk transcribe]', e);
     longSession.transcripts[index] = '';
+    longSession.failed++;
+    longSession.lastError = (e && e.message) ? e.message : String(e);
   } finally {
     longSession.pending--;
-    const doneCount2 = longSession.transcripts.filter((t) => t != null).length;
-    $('#record-chunk-count').textContent = `${doneCount2}/${longSession.chunks.length}`;
+    $('#record-chunk-count').textContent = `${longSession.chunks.length - longSession.pending}/${longSession.chunks.length}`;
   }
 }
 
@@ -270,7 +271,8 @@ async function stopRecording() {
     if (isLong) {
       // Wait for any in-flight chunk transcriptions to complete.
       while (longSession && longSession.pending > 0) {
-        $('#tx-status').textContent = `Finishing ${longSession.pending} chunk transcription(s)…`;
+        const done = longSession.chunks.length - longSession.pending;
+        $('#tx-status').textContent = `Transcribing chunks: ${done}/${longSession.chunks.length}`;
         await new Promise((r) => setTimeout(r, 500));
       }
       // Concatenate chunks into a single blob for the note's audio.
@@ -278,6 +280,10 @@ async function stopRecording() {
       finalBlob = new Blob(chunks, { type: chunks[0]?.type || mimeType || 'audio/webm' });
       finalMime = finalBlob.type;
       transcript = longSession.transcripts.filter(Boolean).join(' ').trim();
+      // If everything failed, capture the reason so the note isn't silently empty.
+      if (!transcript && longSession.failed > 0) {
+        errorMessage = `${longSession.failed}/${longSession.chunks.length} chunks failed. Last error: ${longSession.lastError || '(unknown)'}`;
+      }
       longSession = null;
     } else {
       transcript = await Promise.race([

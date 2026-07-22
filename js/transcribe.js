@@ -83,7 +83,12 @@ async function blobToFloat32(blob) {
   }
 }
 
-export async function transcribe(blob, onProgress) {
+// Global mutex: Whisper's WASM pipeline is single-threaded and not safe to
+// call concurrently. Long recording sessions fire many chunks in parallel;
+// this queue ensures they run one at a time.
+let _txMutex = Promise.resolve();
+
+async function runTranscription(blob, onProgress) {
   const modelName = await getModelName();
   onProgress?.({ stage: 'model', pct: 0, message: 'Loading model…' });
   const transcriber = await getPipeline(modelName, (p) => {
@@ -99,4 +104,12 @@ export async function transcribe(blob, onProgress) {
   });
   onProgress?.({ stage: 'done', pct: 100, message: 'Done' });
   return (result?.text || '').trim();
+}
+
+export async function transcribe(blob, onProgress) {
+  const prev = _txMutex;
+  const next = prev.then(() => runTranscription(blob, onProgress));
+  // Swallow errors in the chain so a single failure doesn't break future calls.
+  _txMutex = next.catch(() => {});
+  return next;
 }
