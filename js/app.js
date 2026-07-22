@@ -260,6 +260,7 @@ async function stopRecording() {
 
   const timeoutMs = 5 * 60 * 1000;
   let timeoutHit = false;
+  let errorMessage = '';
   const timeoutId = setTimeout(() => {
     timeoutHit = true;
     $('#tx-status').textContent = 'Stuck for 5 minutes — closing overlay. Check browser console for CSP/network errors.';
@@ -290,19 +291,26 @@ async function stopRecording() {
   } catch (e) {
     console.error('[transcribe error]', e);
     const msg = (e && e.message) ? e.message : String(e);
+    errorMessage = msg;
     $('#tx-status').textContent = `Error: ${msg}`;
-    toast(`Transcription failed: ${msg.slice(0, 80)}`, 6000);
-    await new Promise((r) => setTimeout(r, timeoutHit ? 100 : 3500));
+    toast(`Transcription failed: ${msg.slice(0, 100)}`, 8000);
+    await new Promise((r) => setTimeout(r, timeoutHit ? 100 : 2500));
   } finally {
     clearTimeout(timeoutId);
   }
   showTranscribeOverlay(false);
 
+  // If transcription failed, embed the error text in the note itself so it's
+  // still visible after the toast disappears. Audio is preserved either way.
+  const noteTranscript = transcript || (errorMessage
+    ? `[transcription failed — audio saved so you can retry]\n\nError: ${errorMessage}`
+    : '');
+
   const id = crypto.randomUUID();
   const note = {
     id,
-    title: derivedTitle(transcript),
-    transcript,
+    title: transcript ? derivedTitle(transcript) : (errorMessage ? 'Untranscribed note' : 'Untitled note'),
+    transcript: noteTranscript,
     audioBlob: finalBlob,
     mimeType: finalMime,
     duration,
