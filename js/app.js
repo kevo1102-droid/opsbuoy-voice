@@ -697,7 +697,23 @@ async function loadWebllmFromSettings() {
   btn.textContent = 'Loading…';
   prog.hidden = false;
   fill.style.width = '0%';
+
+  // Wrap fetch so if a load fails, we can show the exact URL that broke.
+  // This is temporary — restore after WebLLM finishes (or fails).
+  const failedUrls = [];
+  const originalFetch = window.fetch;
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    return originalFetch.call(this, input, init).catch((err) => {
+      if (url) failedUrls.push(url);
+      throw err;
+    });
+  };
+
   try {
+    if (!('gpu' in navigator)) {
+      console.warn('[webllm] navigator.gpu not present — WASM fallback will be extremely slow');
+    }
     await loadWebllm((p) => {
       lbl.textContent = p.message || 'Loading…';
       fill.style.width = `${p.pct || 0}%`;
@@ -708,10 +724,14 @@ async function loadWebllmFromSettings() {
     toast('On-device model ready.');
   } catch (e) {
     console.error('[webllm load]', e);
-    toast(`WebLLM load failed: ${(e.message || e).slice(0, 80)}`, 5000);
+    const msg = e.message || String(e);
+    const detail = failedUrls.length ? ` (last failed URL: ${failedUrls[failedUrls.length - 1]})` : '';
+    toast(`WebLLM load failed: ${msg.slice(0, 80)}${detail}`, 8000);
     btn.disabled = false;
     btn.textContent = 'Load';
-    lbl.textContent = `Error: ${e.message || e}`;
+    lbl.textContent = `Error: ${msg}${detail}`;
+  } finally {
+    window.fetch = originalFetch;
   }
 }
 
