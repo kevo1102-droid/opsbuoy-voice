@@ -28,6 +28,8 @@ async function getPipeline(modelName, onProgress) {
   if (_pipelines.has(modelName)) return _pipelines.get(modelName);
   const { pipeline } = await lib();
   const p = pipeline('automatic-speech-recognition', modelName, {
+    device: 'wasm',
+    dtype: 'q8',
     progress_callback: (data) => {
       if (!onProgress) return;
       if (data.status === 'progress' && typeof data.progress === 'number') {

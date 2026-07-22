@@ -2,7 +2,7 @@
 // Caches app shell for offline. Whisper model weights are cached by the
 // browser's HTTP cache via useBrowserCache; we do not intercept those.
 
-const VERSION = 'v1-2026-07-22';
+const VERSION = 'v1-2026-07-22-2';
 const SHELL_CACHE = `opsbuoy-voice-shell-${VERSION}`;
 
 const SHELL = [
