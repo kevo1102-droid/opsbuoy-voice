@@ -397,7 +397,7 @@ async function openDetail(id) {
   $('#detail-transcript-label').textContent = isText ? 'Note' : 'Transcript';
   $('#delete-note').hidden = false;
   $('#share-note').hidden = !navigator.share;
-  $('#summarize-btn').hidden = listProviders().length === 0;
+  $('#summarize-btn').hidden = false;
 
   const audio = $('#detail-audio');
   if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
@@ -603,9 +603,11 @@ function closeSettings() {
 function refreshSummarizeButton() {
   const btn = $('#summarize-btn');
   if (!btn) return;
-  // Only meaningful on the detail view for an existing note.
+  // Always visible on the detail view. If no provider is configured yet,
+  // the modal itself explains and points to Settings — no hidden-state
+  // guessing about when the button appears.
   const onDetail = views.detail.classList.contains('active');
-  btn.hidden = !onDetail || currentNoteIsNew || listProviders().length === 0;
+  btn.hidden = !onDetail || currentNoteIsNew;
 }
 
 async function predownload() {
@@ -634,21 +636,37 @@ let lastSummary = '';
 function openSummarizeModal() {
   const providers = listProviders();
   const sel = $('#summarize-provider');
+  const picker = $('#summarize-picker');
+  const runBtn = $('#summarize-run');
+  const output = $('#summary-output');
+
   sel.innerHTML = '';
-  providers.forEach((p) => {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = p.label;
-    sel.appendChild(opt);
-  });
-  $('#summary-output').hidden = true;
-  $('#summary-output').textContent = '';
+
+  if (providers.length === 0) {
+    // No providers configured — show an explainer, hide run controls.
+    picker.hidden = true;
+    output.hidden = false;
+    output.textContent = 'No summarization provider set up yet.\n\nOpen Settings and either paste an Anthropic Claude or OpenAI API key, or load the on-device LLM. Then come back here and tap Summarize.';
+    runBtn.textContent = 'Open Settings';
+    runBtn.disabled = false;
+  } else {
+    picker.hidden = false;
+    providers.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      sel.appendChild(opt);
+    });
+    output.hidden = true;
+    output.textContent = '';
+    runBtn.textContent = 'Summarize';
+    runBtn.disabled = false;
+  }
+
   $('#summarize-status').hidden = true;
   $('#summarize-progress-wrap').hidden = true;
   $('#summarize-insert').hidden = true;
   $('#summarize-copy').hidden = true;
-  $('#summarize-run').disabled = false;
-  $('#summarize-run').textContent = 'Summarize';
   lastSummary = '';
   $('#summarize-modal').hidden = false;
 }
@@ -658,6 +676,12 @@ function closeSummarizeModal() {
 }
 
 async function runSummarize() {
+  // If there are no providers yet, the Run button doubles as "Open Settings".
+  if (listProviders().length === 0) {
+    closeSummarizeModal();
+    openSettings();
+    return;
+  }
   const provider = $('#summarize-provider').value;
   if (!provider) return;
   const text = $('#detail-transcript').value.trim();
