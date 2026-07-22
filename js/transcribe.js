@@ -4,7 +4,7 @@
 // HuggingFace and cached in the browser after first download; those are
 // inert inference data, not executable code.
 
-const TRANSFORMERS_URL = '/lib/transformers.min.mjs';
+const TRANSFORMERS_URL = '/lib/transformers.min.js';
 
 let _lib = null;
 let _pipelines = new Map();
