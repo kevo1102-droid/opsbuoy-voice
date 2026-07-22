@@ -9,10 +9,16 @@ let recorder = null;
 let vizRaf = null;
 let timerInterval = null;
 let currentNoteId = null;
+let currentNoteIsNew = false;
+let searchQuery = '';
+let cachedNotes = [];
+
+// Long-recording session state
+let longSession = null; // { chunks: [], transcripts: [], startedAt, pending: number }
 
 function showView(name) {
   Object.entries(views).forEach(([k, el]) => el.classList.toggle('active', k === name));
-  $('#fab').classList.toggle('hidden', name !== 'list');
+  $('#fab-cluster').classList.toggle('hidden', name !== 'list');
   window.scrollTo(0, 0);
 }
 
@@ -56,40 +62,96 @@ function derivedTitle(text) {
   return line.slice(0, 60) || 'Untitled note';
 }
 
+function isTextNote(note) {
+  return !note.audioBlob;
+}
+
+const ICON_MIC = '<svg class="note-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>';
+const ICON_PEN = '<svg class="note-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
+
+// --- List / search ---------------------------------------------------------
+
+function filterNotes(notes, q) {
+  if (!q) return notes;
+  const needle = q.toLowerCase();
+  return notes.filter((n) => {
+    return (
+      (n.title || '').toLowerCase().includes(needle) ||
+      (n.transcript || '').toLowerCase().includes(needle)
+    );
+  });
+}
+
 async function renderList() {
-  const notes = await allNotes();
+  cachedNotes = await allNotes();
+  paintList();
+}
+
+function paintList() {
   const list = $('#notes-list');
   const hero = $('#hero-empty');
+  const noResults = $('#no-results');
+  const searchWrap = $('#search-wrap');
+
+  searchWrap.hidden = cachedNotes.length === 0;
+
+  const filtered = filterNotes(cachedNotes, searchQuery);
   list.innerHTML = '';
-  if (notes.length === 0) {
+
+  if (cachedNotes.length === 0) {
     hero.hidden = false;
+    noResults.hidden = true;
     return;
   }
   hero.hidden = true;
+
+  if (filtered.length === 0) {
+    noResults.hidden = false;
+    $('#no-results-q').textContent = `"${searchQuery}"`;
+    return;
+  }
+  noResults.hidden = true;
+
   const frag = document.createDocumentFragment();
-  for (const n of notes) {
+  for (const n of filtered) {
     const li = document.createElement('li');
     li.className = 'note-card';
     li.dataset.id = n.id;
-    li.innerHTML = `
-      <div class="note-title"></div>
-      <div class="note-preview"></div>
-      <div class="note-meta">
-        <span></span><span class="dot">·</span><span></span>
-      </div>
-    `;
-    li.querySelector('.note-title').textContent = n.title || derivedTitle(n.transcript);
-    li.querySelector('.note-preview').textContent = n.transcript || '(no transcript)';
-    const spans = li.querySelectorAll('.note-meta span');
-    spans[0].textContent = fmtDate(n.createdAt);
-    spans[2].textContent = fmtDuration(n.duration || 0);
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'note-title-row';
+    titleRow.innerHTML = isTextNote(n) ? ICON_PEN : ICON_MIC;
+    const titleSpan = document.createElement('div');
+    titleSpan.className = 'note-title';
+    titleSpan.textContent = n.title || derivedTitle(n.transcript);
+    titleRow.appendChild(titleSpan);
+    li.appendChild(titleRow);
+
+    const preview = document.createElement('div');
+    preview.className = 'note-preview';
+    preview.textContent = n.transcript || '(no content)';
+    li.appendChild(preview);
+
+    const meta = document.createElement('div');
+    meta.className = 'note-meta';
+    const dateSpan = document.createElement('span');
+    dateSpan.textContent = fmtDate(n.createdAt);
+    meta.appendChild(dateSpan);
+    if (!isTextNote(n)) {
+      const dot = document.createElement('span'); dot.className = 'dot'; dot.textContent = '·';
+      const dur = document.createElement('span'); dur.textContent = fmtDuration(n.duration || 0);
+      meta.appendChild(dot); meta.appendChild(dur);
+    }
+    li.appendChild(meta);
+
     li.addEventListener('click', () => openDetail(n.id));
     frag.appendChild(li);
   }
   list.appendChild(frag);
 }
 
-// Recording flow
+// --- Recording -------------------------------------------------------------
+
 function drawViz() {
   const canvas = $('#viz');
   const ctx = canvas.getContext('2d');
@@ -118,18 +180,25 @@ function drawViz() {
   vizRaf = requestAnimationFrame(drawViz);
 }
 
-async function startRecording() {
+async function startRecording({ long = false } = {}) {
   if (!navigator.mediaDevices?.getUserMedia) {
     toast('Microphone not available in this browser.');
     return;
   }
   recorder = new Recorder();
+  longSession = long ? { chunks: [], transcripts: [], startedAt: Date.now(), pending: 0 } : null;
+
   try {
-    await recorder.start();
+    await recorder.start(long ? {
+      chunked: true,
+      chunkSeconds: 30,
+      onChunk: handleLongChunk,
+    } : {});
   } catch (e) {
     console.error(e);
     toast('Mic permission denied.');
     recorder = null;
+    longSession = null;
     return;
   }
   showView('record');
@@ -138,12 +207,37 @@ async function startRecording() {
   $('#record-stop').hidden = false;
   $('#record-cancel').hidden = false;
   $('#record-timer').textContent = '00:00';
+  $('#record-mode-badge').hidden = !long;
+  $('#record-chunks').hidden = !long;
+  if (long) {
+    $('#record-chunk-count').textContent = '0';
+    $('#record-mode-badge').textContent = 'Long session · chunked';
+  }
 
   timerInterval = setInterval(() => {
     if (recorder) $('#record-timer').textContent = fmtDuration(recorder.elapsed());
   }, 500);
   drawViz._history = null;
   drawViz();
+}
+
+async function handleLongChunk({ index, blob, mimeType, final }) {
+  if (!longSession) return;
+  longSession.chunks.push(blob);
+  longSession.pending++;
+  const doneCount = longSession.transcripts.filter((t) => t != null).length;
+  $('#record-chunk-count').textContent = `${doneCount}/${longSession.chunks.length}`;
+  try {
+    const text = await transcribe(blob);
+    longSession.transcripts[index] = text || '';
+  } catch (e) {
+    console.error('[long chunk transcribe]', e);
+    longSession.transcripts[index] = '';
+  } finally {
+    longSession.pending--;
+    const doneCount2 = longSession.transcripts.filter((t) => t != null).length;
+    $('#record-chunk-count').textContent = `${doneCount2}/${longSession.chunks.length}`;
+  }
 }
 
 async function stopRecording() {
@@ -153,25 +247,45 @@ async function stopRecording() {
   $('#record-status').textContent = 'Processing…';
   $('#record-stop').hidden = true;
   $('#record-cancel').hidden = true;
+
+  const isLong = !!longSession;
   const { blob, duration, mimeType } = await recorder.stop();
   recorder = null;
 
-  showTranscribeOverlay(true, 'Loading model…');
+  showTranscribeOverlay(true, isLong ? 'Finalizing long session…' : 'Loading model…');
   let transcript = '';
+  let finalBlob = blob;
+  let finalMime = mimeType;
+
   const timeoutMs = 5 * 60 * 1000;
   let timeoutHit = false;
   const timeoutId = setTimeout(() => {
     timeoutHit = true;
     $('#tx-status').textContent = 'Stuck for 5 minutes — closing overlay. Check browser console for CSP/network errors.';
   }, timeoutMs);
+
   try {
-    transcript = await Promise.race([
-      transcribe(blob, (p) => {
-        $('#tx-status').textContent = p.message || 'Working…';
-        $('#tx-fill').style.width = `${Math.min(100, p.pct || 0)}%`;
-      }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('Timed out after 5 minutes')), timeoutMs)),
-    ]);
+    if (isLong) {
+      // Wait for any in-flight chunk transcriptions to complete.
+      while (longSession && longSession.pending > 0) {
+        $('#tx-status').textContent = `Finishing ${longSession.pending} chunk transcription(s)…`;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      // Concatenate chunks into a single blob for the note's audio.
+      const chunks = longSession.chunks;
+      finalBlob = new Blob(chunks, { type: chunks[0]?.type || mimeType || 'audio/webm' });
+      finalMime = finalBlob.type;
+      transcript = longSession.transcripts.filter(Boolean).join(' ').trim();
+      longSession = null;
+    } else {
+      transcript = await Promise.race([
+        transcribe(blob, (p) => {
+          $('#tx-status').textContent = p.message || 'Working…';
+          $('#tx-fill').style.width = `${Math.min(100, p.pct || 0)}%`;
+        }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Timed out after 5 minutes')), timeoutMs)),
+      ]);
+    }
   } catch (e) {
     console.error('[transcribe error]', e);
     const msg = (e && e.message) ? e.message : String(e);
@@ -188,8 +302,8 @@ async function stopRecording() {
     id,
     title: derivedTitle(transcript),
     transcript,
-    audioBlob: blob,
-    mimeType,
+    audioBlob: finalBlob,
+    mimeType: finalMime,
     duration,
     createdAt: Date.now(),
   };
@@ -206,27 +320,92 @@ function cancelRecording() {
   cancelAnimationFrame(vizRaf);
   recorder.cancel();
   recorder = null;
+  longSession = null;
   showView('list');
 }
 
-// Detail view
+// --- Typed note ------------------------------------------------------------
+
+function newTypedNote() {
+  currentNoteId = null;
+  currentNoteIsNew = true;
+  $('#detail-title').value = '';
+  $('#detail-transcript').value = '';
+  $('#detail-date').textContent = fmtDate(Date.now());
+  $('#detail-duration').textContent = '';
+  $('#detail-dot').hidden = true;
+  $('#detail-type-badge').textContent = 'Typed';
+  $('#detail-audio').hidden = true;
+  $('#detail-audio').src = '';
+  $('#detail-transcript-label').textContent = 'Note';
+  $('#export-audio').hidden = true;
+  $('#delete-note').hidden = true;
+  $('#share-note').hidden = !navigator.share;
+  showView('detail');
+  setTimeout(() => $('#detail-title').focus(), 100);
+}
+
+async function saveNewTypedNoteIfNeeded() {
+  if (!currentNoteIsNew) return false;
+  const title = $('#detail-title').value.trim();
+  const transcript = $('#detail-transcript').value;
+  if (!title && !transcript.trim()) return false; // discard empty
+  const id = crypto.randomUUID();
+  const note = {
+    id,
+    title: title || derivedTitle(transcript),
+    transcript,
+    mimeType: 'text/plain',
+    duration: 0,
+    createdAt: Date.now(),
+  };
+  await addNote(note);
+  currentNoteId = id;
+  currentNoteIsNew = false;
+  return true;
+}
+
+// --- Detail view -----------------------------------------------------------
+
 async function openDetail(id) {
   const n = await getNote(id);
   if (!n) return;
   currentNoteId = id;
+  currentNoteIsNew = false;
+
+  const isText = isTextNote(n);
   $('#detail-title').value = n.title || derivedTitle(n.transcript);
   $('#detail-date').textContent = fmtDate(n.createdAt);
   $('#detail-duration').textContent = fmtDuration(n.duration || 0);
+  $('#detail-dot').hidden = isText;
+  $('#detail-type-badge').textContent = isText ? 'Typed' : 'Voice';
+  $('#detail-transcript-label').textContent = isText ? 'Note' : 'Transcript';
+  $('#delete-note').hidden = false;
+  $('#share-note').hidden = !navigator.share;
+
   const audio = $('#detail-audio');
   if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
-  const url = URL.createObjectURL(n.audioBlob);
-  audio.src = url;
-  audio.dataset.url = url;
+  if (isText) {
+    audio.hidden = true;
+    audio.src = '';
+    delete audio.dataset.url;
+    $('#export-audio').hidden = true;
+  } else {
+    audio.hidden = false;
+    const url = URL.createObjectURL(n.audioBlob);
+    audio.src = url;
+    audio.dataset.url = url;
+    $('#export-audio').hidden = false;
+  }
   $('#detail-transcript').value = n.transcript || '';
   showView('detail');
 }
 
 async function saveDetailEdits() {
+  if (currentNoteIsNew) {
+    await saveNewTypedNoteIfNeeded();
+    return;
+  }
   if (!currentNoteId) return;
   const title = $('#detail-title').value.trim() || 'Untitled note';
   const transcript = $('#detail-transcript').value;
@@ -246,21 +425,38 @@ function download(filename, content, type = 'text/plain') {
 }
 
 async function exportMd() {
+  await saveDetailEdits();
+  if (!currentNoteId) return;
   const n = await getNote(currentNoteId);
   if (!n) return;
   const date = new Date(n.createdAt).toISOString().slice(0, 10);
-  const md = `# ${n.title}\n\n_${new Date(n.createdAt).toLocaleString()} · ${fmtDuration(n.duration || 0)}_\n\n${n.transcript || ''}\n`;
+  const md = `# ${n.title}\n\n_${new Date(n.createdAt).toLocaleString()}${!isTextNote(n) ? ` · ${fmtDuration(n.duration || 0)}` : ''}_\n\n${n.transcript || ''}\n`;
   const safe = n.title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').slice(0, 40) || 'note';
   download(`${date}-${safe}.md`, md, 'text/markdown');
 }
 
 async function exportAudio() {
   const n = await getNote(currentNoteId);
-  if (!n) return;
+  if (!n || !n.audioBlob) return;
   const ext = (n.mimeType || '').includes('mp4') ? 'm4a' : (n.mimeType || '').includes('ogg') ? 'ogg' : 'webm';
   const date = new Date(n.createdAt).toISOString().slice(0, 10);
   const safe = n.title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').slice(0, 40) || 'note';
   download(`${date}-${safe}.${ext}`, n.audioBlob);
+}
+
+async function shareNote() {
+  await saveDetailEdits();
+  if (!currentNoteId || !navigator.share) return;
+  const n = await getNote(currentNoteId);
+  if (!n) return;
+  try {
+    await navigator.share({
+      title: n.title,
+      text: `${n.title}\n\n${n.transcript || ''}`,
+    });
+  } catch (e) {
+    if (e && e.name !== 'AbortError') toast('Share failed.');
+  }
 }
 
 async function deleteCurrent() {
@@ -268,12 +464,91 @@ async function deleteCurrent() {
   if (!confirm('Delete this note? This cannot be undone.')) return;
   await deleteNote(currentNoteId);
   currentNoteId = null;
+  currentNoteIsNew = false;
   await renderList();
   showView('list');
   toast('Deleted.');
 }
 
-// Settings
+// --- Backup / restore ------------------------------------------------------
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = r.result || '';
+      const comma = s.indexOf(',');
+      resolve(comma >= 0 ? s.slice(comma + 1) : s);
+    };
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+function base64ToBlob(b64, type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: type || 'application/octet-stream' });
+}
+
+async function exportAllNotes() {
+  toast('Preparing backup…');
+  const notes = await allNotes();
+  const out = { version: 1, exportedAt: Date.now(), count: notes.length, notes: [] };
+  for (const n of notes) {
+    const item = {
+      id: n.id,
+      title: n.title,
+      transcript: n.transcript,
+      mimeType: n.mimeType,
+      duration: n.duration || 0,
+      createdAt: n.createdAt,
+    };
+    if (n.audioBlob) {
+      item.audio = await blobToBase64(n.audioBlob);
+    }
+    out.notes.push(item);
+  }
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  download(`opsbuoy-voice-backup-${stamp}.json`, JSON.stringify(out), 'application/json');
+  toast(`Backed up ${out.count} note(s).`);
+}
+
+async function importBackup(file) {
+  if (!file) return;
+  const text = await file.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    toast('Not a valid backup file.'); return;
+  }
+  if (!data || !Array.isArray(data.notes)) { toast('Not a valid backup file.'); return; }
+  const existing = await allNotes();
+  const existingIds = new Set(existing.map((n) => n.id));
+  let added = 0, skipped = 0;
+  for (const item of data.notes) {
+    if (!item || !item.id || existingIds.has(item.id)) { skipped++; continue; }
+    const note = {
+      id: item.id,
+      title: item.title || 'Untitled note',
+      transcript: item.transcript || '',
+      mimeType: item.mimeType || 'text/plain',
+      duration: item.duration || 0,
+      createdAt: item.createdAt || Date.now(),
+    };
+    if (item.audio) {
+      note.audioBlob = base64ToBlob(item.audio, item.mimeType);
+    }
+    try { await addNote(note); added++; } catch { skipped++; }
+  }
+  await renderList();
+  toast(`Restored ${added} · skipped ${skipped}.`);
+}
+
+// --- Settings --------------------------------------------------------------
+
 function showTranscribeOverlay(show, status = 'Working…') {
   const o = $('#transcribe-overlay');
   o.hidden = !show;
@@ -317,15 +592,20 @@ async function predownload() {
   }
 }
 
-// Wire up
+// --- Wire up ---------------------------------------------------------------
+
 function init() {
   // Defensive: force both modals hidden on boot, regardless of any stale state.
   $('#transcribe-overlay').hidden = true;
   $('#settings-modal').hidden = true;
 
-  $('#fab').addEventListener('click', startRecording);
+  $('#fab').addEventListener('click', () => startRecording({ long: false }));
+  $('#fab-long').addEventListener('click', () => startRecording({ long: true }));
+  $('#fab-text').addEventListener('click', newTypedNote);
+
   $('#record-stop').addEventListener('click', stopRecording);
   $('#record-cancel').addEventListener('click', cancelRecording);
+
   $('#detail-back').addEventListener('click', async () => {
     await saveDetailEdits();
     await renderList();
@@ -341,7 +621,25 @@ function init() {
   $('#export-md').addEventListener('click', exportMd);
   $('#export-audio').addEventListener('click', exportAudio);
   $('#delete-note').addEventListener('click', deleteCurrent);
+  $('#share-note').addEventListener('click', shareNote);
 
+  // Search
+  const searchInput = $('#search-input');
+  const searchClear = $('#search-clear');
+  searchInput.addEventListener('input', (e) => {
+    searchQuery = e.target.value.trim();
+    searchClear.hidden = !searchQuery;
+    paintList();
+  });
+  searchClear.addEventListener('click', () => {
+    searchInput.value = '';
+    searchQuery = '';
+    searchClear.hidden = true;
+    paintList();
+    searchInput.focus();
+  });
+
+  // Settings
   $('#settings-btn').addEventListener('click', openSettings);
   $('#settings-close').addEventListener('click', closeSettings);
   $('#settings-modal').addEventListener('click', (e) => {
@@ -352,6 +650,15 @@ function init() {
     toast('Model changed. Next transcription will download it.');
   });
   $('#predownload').addEventListener('click', predownload);
+
+  // Backup / restore
+  $('#export-all').addEventListener('click', exportAllNotes);
+  $('#import-file').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting same file
+    if (file) await importBackup(file);
+  });
+
   $('#clear-all').addEventListener('click', async () => {
     if (!confirm('Delete ALL notes? This cannot be undone.')) return;
     await clearAll();

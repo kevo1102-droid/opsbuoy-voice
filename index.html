@@ -27,24 +27,35 @@
   <main id="app-main">
     <!-- LIST VIEW -->
     <section id="list-view" class="view active">
+      <div class="search-wrap" id="search-wrap" hidden>
+        <input id="search-input" type="search" placeholder="Search notes…" autocomplete="off" />
+        <button id="search-clear" class="icon-btn" aria-label="Clear search" hidden>&times;</button>
+      </div>
       <div class="hero-empty" id="hero-empty" hidden>
         <div class="hero-title">Your notes<br/>stay on your phone.</div>
-        <p class="hero-sub">Nothing uploaded. No account. No backend.<br/>Tap the mic to start.</p>
+        <p class="hero-sub">Nothing uploaded. No account. No backend.<br/>Tap the mic to speak, or the pencil to type.</p>
       </div>
       <ul id="notes-list" class="notes-list"></ul>
+      <div id="no-results" class="no-results" hidden>
+        No notes match <span id="no-results-q"></span>.
+      </div>
     </section>
 
     <!-- RECORD VIEW -->
     <section id="record-view" class="view">
       <div class="record-stage">
+        <div id="record-mode-badge" class="record-mode-badge" hidden>Long session · chunked</div>
         <div id="record-status" class="record-status">Ready</div>
         <div id="record-timer" class="record-timer">00:00</div>
         <div class="record-viz">
           <canvas id="viz" width="600" height="120"></canvas>
         </div>
+        <div id="record-chunks" class="record-chunks" hidden>
+          <span id="record-chunk-count">0</span> chunks transcribed
+        </div>
         <div class="record-actions">
           <button id="record-cancel" class="btn-ghost" hidden>Cancel</button>
-          <button id="record-stop" class="btn-primary" hidden>Stop & transcribe</button>
+          <button id="record-stop" class="btn-primary" hidden>Stop & save</button>
         </div>
       </div>
     </section>
@@ -54,19 +65,21 @@
       <button id="detail-back" class="btn-ghost small">&larr; Back</button>
       <input id="detail-title" class="detail-title-input" placeholder="Untitled note" />
       <div class="detail-meta">
+        <span id="detail-type-badge" class="type-badge">Voice</span>
         <span id="detail-date"></span>
-        <span class="dot">·</span>
+        <span class="dot" id="detail-dot">·</span>
         <span id="detail-duration"></span>
       </div>
       <audio id="detail-audio" controls></audio>
       <div class="detail-transcript-wrap">
         <div class="detail-transcript-header">
-          <span>Transcript</span>
+          <span id="detail-transcript-label">Transcript</span>
           <button id="copy-transcript" class="btn-ghost small">Copy</button>
         </div>
-        <textarea id="detail-transcript" spellcheck="true"></textarea>
+        <textarea id="detail-transcript" spellcheck="true" placeholder="Type your note…"></textarea>
       </div>
       <div class="detail-footer">
+        <button id="share-note" class="btn-ghost small" hidden>Share</button>
         <button id="export-md" class="btn-ghost small">Export .md</button>
         <button id="export-audio" class="btn-ghost small">Download audio</button>
         <button id="delete-note" class="btn-danger small">Delete</button>
@@ -74,10 +87,18 @@
     </section>
   </main>
 
-  <!-- Floating record button (visible on list view) -->
-  <button id="fab" class="fab" aria-label="Record">
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-  </button>
+  <!-- FAB cluster (visible on list view) -->
+  <div id="fab-cluster" class="fab-cluster">
+    <button id="fab-text" class="fab fab-secondary" aria-label="New typed note">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+    </button>
+    <button id="fab-long" class="fab fab-secondary" aria-label="Long recording session">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h2l3-9 4 18 3-12 2 6h4"/></svg>
+    </button>
+    <button id="fab" class="fab" aria-label="Record">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
 
   <!-- Toast -->
   <div id="toast" class="toast" hidden></div>
@@ -112,6 +133,29 @@
           <div class="model-progress-label">Downloading… <span id="model-progress-pct">0%</span></div>
           <div class="model-progress-bar"><div id="model-progress-fill"></div></div>
         </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">Backup all notes</div>
+            <div class="setting-help">Download every note + audio as a single JSON file.</div>
+          </div>
+          <button id="export-all" class="btn-primary small">Export</button>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">Restore from backup</div>
+            <div class="setting-help">Import a previously-exported backup file.</div>
+          </div>
+          <label class="btn-ghost small">
+            Import
+            <input id="import-file" type="file" accept="application/json,.json" hidden />
+          </label>
+        </div>
+
+        <div class="setting-divider"></div>
+
         <div class="setting-row">
           <div>
             <div class="setting-title">Storage used</div>
