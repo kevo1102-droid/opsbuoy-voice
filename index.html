@@ -79,6 +79,7 @@
         <textarea id="detail-transcript" spellcheck="true" placeholder="Type your note…"></textarea>
       </div>
       <div class="detail-footer">
+        <button id="summarize-btn" class="btn-primary small" hidden>Summarize</button>
         <button id="share-note" class="btn-ghost small" hidden>Share</button>
         <button id="export-md" class="btn-ghost small">Export .md</button>
         <button id="export-audio" class="btn-ghost small">Download audio</button>
@@ -136,6 +137,36 @@
 
         <div class="setting-divider"></div>
 
+        <div class="setting-section-title">Summarization <span class="setting-badge">optional</span></div>
+        <div class="setting-help">
+          Off by default. Enabling any of these gives notes a Summarize button.
+          Cloud options send the transcript to that provider with your key —
+          we never see it. The on-device option runs entirely on your phone.
+        </div>
+        <div class="setting-row column">
+          <label class="setting-label">Anthropic Claude key</label>
+          <input id="anthropic-key" type="password" class="settings-input" placeholder="sk-ant-…" autocomplete="off" />
+        </div>
+        <div class="setting-row column">
+          <label class="setting-label">OpenAI key</label>
+          <input id="openai-key" type="password" class="settings-input" placeholder="sk-…" autocomplete="off" />
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-title">On-device LLM</div>
+            <div class="setting-help" id="webllm-help">
+              Loads a small language model into your browser. ~700MB one-time download. Needs WebGPU for reasonable speed.
+            </div>
+          </div>
+          <button id="webllm-load" class="btn-primary small">Load</button>
+        </div>
+        <div id="webllm-progress" class="model-progress" hidden>
+          <div class="model-progress-label" id="webllm-progress-label">Loading…</div>
+          <div class="model-progress-bar"><div id="webllm-progress-fill"></div></div>
+        </div>
+
+        <div class="setting-divider"></div>
+
         <div class="setting-row">
           <div>
             <div class="setting-title">Backup all notes</div>
@@ -165,6 +196,33 @@
         </div>
         <div class="setting-footer">
           <div class="privacy-note">All audio and transcripts live only on this device. Nothing is uploaded.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summarize modal -->
+  <div id="summarize-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Summarize this note</h3>
+        <button id="summarize-close" class="icon-btn" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-row column" id="summarize-picker">
+          <label class="setting-label">Provider</label>
+          <select id="summarize-provider"></select>
+        </div>
+        <div class="tx-status" id="summarize-status" hidden></div>
+        <div class="model-progress-bar" id="summarize-progress-wrap" hidden><div id="summarize-fill"></div></div>
+        <div class="summary-output" id="summary-output" hidden></div>
+        <div class="setting-row">
+          <button id="summarize-run" class="btn-primary small">Summarize</button>
+          <button id="summarize-insert" class="btn-ghost small" hidden>Add to note</button>
+          <button id="summarize-copy" class="btn-ghost small" hidden>Copy</button>
+        </div>
+        <div class="setting-footer">
+          <div class="privacy-note" id="summarize-privacy">Cloud providers see your transcript when you press Summarize. On-device stays on your phone.</div>
         </div>
       </div>
     </div>

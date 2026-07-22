@@ -23,8 +23,25 @@ OpsBuoy Voice is a client-only PWA. There is no backend, no user account, and no
 
 ## Deps
 
-- `@huggingface/transformers@3.0.2` (CDN) — Apache 2.0
-- Whisper model weights from `Xenova/whisper-*.en` on HuggingFace — MIT
+**Vendored (served from our own origin under `/lib/`):**
+- `@huggingface/transformers@3.0.2` — Apache 2.0 — `lib/transformers.min.mjs`
+- `onnxruntime-web@1.20.x` WASM binary — MIT — `lib/ort-wasm-simd-threaded.wasm` + `.mjs` loader
+- `@mlc-ai/web-llm@0.2.79` — Apache 2.0 — `lib/web-llm.js`
+
+**Runtime-fetched from HuggingFace CDN (cached in browser after first download):**
+- Whisper model weights from `Xenova/whisper-*.en` — MIT
+- Llama-3.2-1B-Instruct model weights from `mlc-ai/` — Llama community license
+- MLC WebLLM WASM shim libraries from `mlc-ai/web-llm-libs`
+
+Model weights are inert inference data — a compromised model can only produce
+misleading outputs, it cannot execute code, fetch data, or exfiltrate anything.
+Library JS + WASM are the executable pieces and are vendored on our origin so
+that a CDN compromise cannot alter them.
+
+**CSP for third-party origins:** Only `huggingface.co`, `raw.githubusercontent.com`
+(WebLLM WASM shims), `api.anthropic.com`, and `api.openai.com` (BYO summarization
+keys) are allowed for `connect-src`. Everything script/worker executable is
+`'self'`.
 
 ## Pre-ship checklist
 

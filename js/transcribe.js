@@ -1,8 +1,10 @@
 // Whisper WASM transcription via @huggingface/transformers.
-// Loaded from CDN (jsdelivr). Model weights fetched from HuggingFace and cached
-// by the browser (Cache API) after first download. All inference is on-device.
+// Library + ORT WASM are vendored under /lib/ (same-origin) so we don't
+// depend on jsdelivr at runtime. Model weights are still fetched from
+// HuggingFace and cached in the browser after first download; those are
+// inert inference data, not executable code.
 
-const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2';
+const TRANSFORMERS_URL = '/lib/transformers.min.mjs';
 
 let _lib = null;
 let _pipelines = new Map();
@@ -12,6 +14,9 @@ async function lib() {
   _lib = await import(/* @vite-ignore */ TRANSFORMERS_URL);
   _lib.env.allowLocalModels = false;
   _lib.env.useBrowserCache = true;
+  // Point ORT at the vendored WASM binary + loader so nothing runtime-fetches
+  // from jsdelivr.
+  _lib.env.backends.onnx.wasm.wasmPaths = '/lib/';
   return _lib;
 }
 

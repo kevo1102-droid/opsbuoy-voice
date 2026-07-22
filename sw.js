@@ -2,9 +2,12 @@
 // Caches app shell for offline. Whisper model weights are cached by the
 // browser's HTTP cache via useBrowserCache; we do not intercept those.
 
-const VERSION = 'v2-2026-07-22';
+const VERSION = 'v3-2026-07-22-vendored';
 const SHELL_CACHE = `opsbuoy-voice-shell-${VERSION}`;
 
+// Only cache the small-shell files here. The 17MB of vendored libraries are
+// large enough to hurt install time if pre-cached; let the browser's HTTP
+// cache handle them on demand.
 const SHELL = [
   '/',
   '/index.html',
@@ -14,6 +17,7 @@ const SHELL = [
   '/js/db.js',
   '/js/recorder.js',
   '/js/transcribe.js',
+  '/js/summarize.js',
   '/icons/icon.svg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',

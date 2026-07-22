@@ -1,6 +1,7 @@
 import { addNote, allNotes, getNote, updateNote, deleteNote, clearAll, estimateUsage } from './db.js';
 import { Recorder } from './recorder.js';
 import { transcribe, preloadModel, getModelName, setModelName } from './transcribe.js';
+import { summarize, getKey, setKey, loadWebllm, isWebllmReady, listProviders } from './summarize.js';
 
 const $ = (sel) => document.querySelector(sel);
 const views = { list: $('#list-view'), record: $('#record-view'), detail: $('#detail-view') };
@@ -382,6 +383,7 @@ async function openDetail(id) {
   $('#detail-transcript-label').textContent = isText ? 'Note' : 'Transcript';
   $('#delete-note').hidden = false;
   $('#share-note').hidden = !navigator.share;
+  $('#summarize-btn').hidden = listProviders().length === 0;
 
   const audio = $('#detail-audio');
   if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
@@ -565,6 +567,16 @@ async function openSettings() {
   $('#storage-used').textContent = usage
     ? `${fmtBytes(usage.usage)} used${usage.quota ? ` of ${fmtBytes(usage.quota)} available` : ''}`
     : 'Unavailable';
+  $('#anthropic-key').value = getKey('anthropic') || '';
+  $('#openai-key').value = getKey('openai') || '';
+  if (isWebllmReady()) {
+    $('#webllm-load').textContent = 'Loaded ✓';
+    $('#webllm-load').disabled = true;
+  }
+  const webllmHelp = $('#webllm-help');
+  if (!('gpu' in navigator)) {
+    webllmHelp.textContent = 'WebGPU not detected on this browser — will run via slow WASM fallback. Chrome/Edge on desktop or Android with WebGPU flag is recommended.';
+  }
   $('#settings-modal').hidden = false;
 }
 
@@ -592,12 +604,124 @@ async function predownload() {
   }
 }
 
+// --- Summarize -------------------------------------------------------------
+
+let lastSummary = '';
+
+function openSummarizeModal() {
+  const providers = listProviders();
+  const sel = $('#summarize-provider');
+  sel.innerHTML = '';
+  providers.forEach((p) => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.label;
+    sel.appendChild(opt);
+  });
+  $('#summary-output').hidden = true;
+  $('#summary-output').textContent = '';
+  $('#summarize-status').hidden = true;
+  $('#summarize-progress-wrap').hidden = true;
+  $('#summarize-insert').hidden = true;
+  $('#summarize-copy').hidden = true;
+  $('#summarize-run').disabled = false;
+  $('#summarize-run').textContent = 'Summarize';
+  lastSummary = '';
+  $('#summarize-modal').hidden = false;
+}
+
+function closeSummarizeModal() {
+  $('#summarize-modal').hidden = true;
+}
+
+async function runSummarize() {
+  const provider = $('#summarize-provider').value;
+  if (!provider) return;
+  const text = $('#detail-transcript').value.trim();
+  if (!text) { toast('Nothing to summarize.'); return; }
+  const runBtn = $('#summarize-run');
+  runBtn.disabled = true;
+  runBtn.textContent = 'Working…';
+  const status = $('#summarize-status');
+  const fillWrap = $('#summarize-progress-wrap');
+  const fill = $('#summarize-fill');
+  status.hidden = false;
+  status.textContent = 'Starting…';
+  fillWrap.hidden = false;
+  fill.style.width = '0%';
+  try {
+    const summary = await summarize(text, provider, (p) => {
+      status.textContent = p.message || 'Working…';
+      fill.style.width = `${Math.min(100, p.pct || 0)}%`;
+    });
+    lastSummary = summary;
+    $('#summary-output').textContent = summary || '(empty)';
+    $('#summary-output').hidden = false;
+    $('#summarize-insert').hidden = false;
+    $('#summarize-copy').hidden = false;
+    status.hidden = true;
+    fillWrap.hidden = true;
+  } catch (e) {
+    console.error('[summarize]', e);
+    status.textContent = `Error: ${e.message || e}`;
+    fillWrap.hidden = true;
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = 'Summarize';
+  }
+}
+
+async function insertSummary() {
+  if (!lastSummary || !currentNoteId) return;
+  const textarea = $('#detail-transcript');
+  const cur = textarea.value;
+  const stamped = `## Summary\n${lastSummary}\n\n---\n\n${cur}`;
+  textarea.value = stamped;
+  await saveDetailEdits();
+  toast('Summary added to top of note.');
+  closeSummarizeModal();
+}
+
+async function copySummary() {
+  if (!lastSummary) return;
+  try { await navigator.clipboard.writeText(lastSummary); toast('Copied.'); }
+  catch { toast('Copy failed.'); }
+}
+
+async function loadWebllmFromSettings() {
+  const btn = $('#webllm-load');
+  const prog = $('#webllm-progress');
+  const lbl = $('#webllm-progress-label');
+  const fill = $('#webllm-progress-fill');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  prog.hidden = false;
+  fill.style.width = '0%';
+  try {
+    await loadWebllm((p) => {
+      lbl.textContent = p.message || 'Loading…';
+      fill.style.width = `${p.pct || 0}%`;
+    });
+    fill.style.width = '100%';
+    lbl.textContent = 'Ready.';
+    btn.textContent = 'Loaded ✓';
+    toast('On-device model ready.');
+  } catch (e) {
+    console.error('[webllm load]', e);
+    toast(`WebLLM load failed: ${(e.message || e).slice(0, 80)}`, 5000);
+    btn.disabled = false;
+    btn.textContent = 'Load';
+    lbl.textContent = `Error: ${e.message || e}`;
+  }
+}
+
 // --- Wire up ---------------------------------------------------------------
 
 function init() {
-  // Defensive: force both modals hidden on boot, regardless of any stale state.
+  // Defensive: force all modals hidden on boot, regardless of any stale state.
   $('#transcribe-overlay').hidden = true;
   $('#settings-modal').hidden = true;
+  $('#summarize-modal').hidden = true;
 
   $('#fab').addEventListener('click', () => startRecording({ long: false }));
   $('#fab-long').addEventListener('click', () => startRecording({ long: true }));
@@ -622,6 +746,14 @@ function init() {
   $('#export-audio').addEventListener('click', exportAudio);
   $('#delete-note').addEventListener('click', deleteCurrent);
   $('#share-note').addEventListener('click', shareNote);
+  $('#summarize-btn').addEventListener('click', openSummarizeModal);
+  $('#summarize-close').addEventListener('click', closeSummarizeModal);
+  $('#summarize-modal').addEventListener('click', (e) => {
+    if (e.target === $('#summarize-modal')) closeSummarizeModal();
+  });
+  $('#summarize-run').addEventListener('click', runSummarize);
+  $('#summarize-insert').addEventListener('click', insertSummary);
+  $('#summarize-copy').addEventListener('click', copySummary);
 
   // Search
   const searchInput = $('#search-input');
@@ -650,6 +782,17 @@ function init() {
     toast('Model changed. Next transcription will download it.');
   });
   $('#predownload').addEventListener('click', predownload);
+
+  // Summarization keys + WebLLM
+  $('#anthropic-key').addEventListener('change', (e) => {
+    setKey('anthropic', e.target.value.trim());
+    toast(e.target.value.trim() ? 'Claude key saved on this device.' : 'Claude key removed.');
+  });
+  $('#openai-key').addEventListener('change', (e) => {
+    setKey('openai', e.target.value.trim());
+    toast(e.target.value.trim() ? 'OpenAI key saved on this device.' : 'OpenAI key removed.');
+  });
+  $('#webllm-load').addEventListener('click', loadWebllmFromSettings);
 
   // Backup / restore
   $('#export-all').addEventListener('click', exportAllNotes);
