@@ -743,6 +743,14 @@ function init() {
   $('#settings-modal').hidden = true;
   $('#summarize-modal').hidden = true;
 
+  // Surface CSP violations to a toast — otherwise a blocked fetch shows as
+  // a generic "Failed to fetch" with no clue which URL was blocked.
+  window.addEventListener('securitypolicyviolation', (e) => {
+    const line = `CSP blocked ${e.violatedDirective}: ${e.blockedURI}`;
+    console.error('[CSP]', line, e);
+    toast(line, 10000);
+  });
+
   $('#fab').addEventListener('click', () => startRecording({ long: false }));
   $('#fab-long').addEventListener('click', () => startRecording({ long: true }));
   $('#fab-text').addEventListener('click', newTypedNote);
