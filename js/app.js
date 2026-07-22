@@ -597,6 +597,15 @@ async function openSettings() {
 function closeSettings() {
   $('#settings-modal').hidden = true;
   $('#model-progress').hidden = true;
+  refreshSummarizeButton();
+}
+
+function refreshSummarizeButton() {
+  const btn = $('#summarize-btn');
+  if (!btn) return;
+  // Only meaningful on the detail view for an existing note.
+  const onDetail = views.detail.classList.contains('active');
+  btn.hidden = !onDetail || currentNoteIsNew || listProviders().length === 0;
 }
 
 async function predownload() {
@@ -870,15 +879,25 @@ function init() {
   });
   $('#predownload').addEventListener('click', predownload);
 
-  // Summarization keys + WebLLM
-  $('#anthropic-key').addEventListener('change', (e) => {
-    setKey('anthropic', e.target.value.trim());
-    toast(e.target.value.trim() ? 'Claude key saved on this device.' : 'Claude key removed.');
-  });
-  $('#openai-key').addEventListener('change', (e) => {
-    setKey('openai', e.target.value.trim());
-    toast(e.target.value.trim() ? 'OpenAI key saved on this device.' : 'OpenAI key removed.');
-  });
+  // Summarization keys + WebLLM — listen to BOTH 'input' (fires per keystroke,
+  // and on mobile paste) and 'change' (fires on blur). Mobile browsers can be
+  // inconsistent about which fires when pasting.
+  const wireKeyInput = (id, provider, label) => {
+    const el = $(id);
+    let last = getKey(provider) || '';
+    const save = () => {
+      const v = el.value.trim();
+      if (v === last) return;
+      last = v;
+      setKey(provider, v);
+      if (v) toast(`${label} key saved on this device.`);
+    };
+    el.addEventListener('input', save);
+    el.addEventListener('change', save);
+    el.addEventListener('blur', save);
+  };
+  wireKeyInput('#anthropic-key', 'anthropic', 'Claude');
+  wireKeyInput('#openai-key', 'openai', 'OpenAI');
   $('#webllm-load').addEventListener('click', loadWebllmFromSettings);
 
   // Backup / restore
