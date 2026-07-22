@@ -21,7 +21,10 @@ async function lib() {
 }
 
 export async function getModelName() {
-  return localStorage.getItem('opsbuoy-voice.model') || 'Xenova/whisper-tiny.en';
+  const stored = localStorage.getItem('opsbuoy-voice.model');
+  // tiny.en was removed for quality reasons — auto-upgrade anyone still on it.
+  if (!stored || stored === 'Xenova/whisper-tiny.en') return 'Xenova/whisper-base.en';
+  return stored;
 }
 
 export async function setModelName(name) {
