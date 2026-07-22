@@ -774,10 +774,15 @@ async function loadWebllmFromSettings() {
     console.error('[webllm load]', e);
     const msg = e.message || String(e);
     const detail = failedUrls.length ? ` (last failed URL: ${failedUrls[failedUrls.length - 1]})` : '';
-    toast(`WebLLM load failed: ${msg.slice(0, 80)}${detail}`, 8000);
+    // Pre-flight passed but WebLLM's own worker-level fetch broke. This is
+    // almost always mobile Chrome not fully supporting the tvmjs runtime.
+    const guidance = failedUrls.length
+      ? ''
+      : ' — pre-flight passed, so this is inside WebLLM/tvmjs (typical on mobile Chrome). Use a Claude or OpenAI API key above for summarization instead.';
+    toast(`WebLLM load failed: ${msg.slice(0, 60)}${detail}${guidance}`, 12000);
     btn.disabled = false;
     btn.textContent = 'Load';
-    lbl.textContent = `Error: ${msg}${detail}`;
+    lbl.textContent = `Error: ${msg}${detail}${guidance}`;
   } finally {
     window.fetch = originalFetch;
   }
