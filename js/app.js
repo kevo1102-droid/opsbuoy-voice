@@ -702,9 +702,51 @@ async function loadWebllmFromSettings() {
   const lbl = $('#webllm-progress-label');
   const fill = $('#webllm-progress-fill');
   btn.disabled = true;
-  btn.textContent = 'Loading…';
+  btn.textContent = 'Checking…';
   prog.hidden = false;
   fill.style.width = '0%';
+
+  // Pre-flight: verify WebGPU + reachability to each URL WebLLM will hit.
+  // This runs BEFORE handing off to WebLLM so any failure is visible with
+  // a specific URL, not swallowed inside a Web Worker.
+  lbl.textContent = 'Checking WebGPU…';
+  const gpu = 'gpu' in navigator ? navigator.gpu : null;
+  let adapter = null;
+  if (gpu) {
+    try { adapter = await gpu.requestAdapter(); } catch {}
+  }
+  if (!adapter) {
+    const msg = gpu
+      ? 'WebGPU present but no adapter available on this device. Try Chrome/Edge on a desktop, or enable chrome://flags/#enable-unsafe-webgpu on Android.'
+      : 'WebGPU not available in this browser. Try Chrome/Edge desktop or enable chrome://flags/#enable-unsafe-webgpu on Android.';
+    lbl.textContent = `Error: ${msg}`;
+    toast(msg, 10000);
+    btn.disabled = false;
+    btn.textContent = 'Load';
+    return;
+  }
+
+  const probeUrls = [
+    'https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC/resolve/main/mlc-chat-config.json',
+    'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_48/Llama-3.2-1B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm',
+  ];
+  lbl.textContent = 'Probing endpoints…';
+  for (const url of probeUrls) {
+    try {
+      const r = await fetch(url, { method: 'HEAD', mode: 'cors' });
+      if (!r.ok && r.status !== 405) {
+        throw new Error(`HTTP ${r.status}`);
+      }
+    } catch (e) {
+      const msg = `Pre-flight probe failed for ${url}: ${e.message || e}`;
+      console.error('[webllm probe]', msg);
+      lbl.textContent = `Error: ${msg}`;
+      toast(msg, 12000);
+      btn.disabled = false;
+      btn.textContent = 'Load';
+      return;
+    }
+  }
 
   // Wrap fetch so if a load fails, we can show the exact URL that broke.
   // This is temporary — restore after WebLLM finishes (or fails).
@@ -718,10 +760,8 @@ async function loadWebllmFromSettings() {
     });
   };
 
+  btn.textContent = 'Loading…';
   try {
-    if (!('gpu' in navigator)) {
-      console.warn('[webllm] navigator.gpu not present — WASM fallback will be extremely slow');
-    }
     await loadWebllm((p) => {
       lbl.textContent = p.message || 'Loading…';
       fill.style.width = `${p.pct || 0}%`;
