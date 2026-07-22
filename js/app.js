@@ -158,14 +158,28 @@ async function stopRecording() {
 
   showTranscribeOverlay(true, 'Loading model…');
   let transcript = '';
+  const timeoutMs = 5 * 60 * 1000;
+  let timeoutHit = false;
+  const timeoutId = setTimeout(() => {
+    timeoutHit = true;
+    $('#tx-status').textContent = 'Stuck for 5 minutes — closing overlay. Check browser console for CSP/network errors.';
+  }, timeoutMs);
   try {
-    transcript = await transcribe(blob, (p) => {
-      $('#tx-status').textContent = p.message || 'Working…';
-      $('#tx-fill').style.width = `${Math.min(100, p.pct || 0)}%`;
-    });
+    transcript = await Promise.race([
+      transcribe(blob, (p) => {
+        $('#tx-status').textContent = p.message || 'Working…';
+        $('#tx-fill').style.width = `${Math.min(100, p.pct || 0)}%`;
+      }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Timed out after 5 minutes')), timeoutMs)),
+    ]);
   } catch (e) {
-    console.error(e);
-    toast('Transcription failed — note saved without transcript.');
+    console.error('[transcribe error]', e);
+    const msg = (e && e.message) ? e.message : String(e);
+    $('#tx-status').textContent = `Error: ${msg}`;
+    toast(`Transcription failed: ${msg.slice(0, 80)}`, 6000);
+    await new Promise((r) => setTimeout(r, timeoutHit ? 100 : 3500));
+  } finally {
+    clearTimeout(timeoutId);
   }
   showTranscribeOverlay(false);
 

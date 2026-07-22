@@ -31,13 +31,19 @@ async function getPipeline(modelName, onProgress) {
     device: 'wasm',
     dtype: 'q8',
     progress_callback: (data) => {
+      // Log everything for debugging — the callback fires with several event shapes.
+      try { console.log('[whisper]', data); } catch {}
       if (!onProgress) return;
-      if (data.status === 'progress' && typeof data.progress === 'number') {
-        onProgress({ stage: 'download', pct: data.progress, file: data.file });
-      } else if (data.status === 'ready') {
-        onProgress({ stage: 'ready', pct: 100 });
-      } else if (data.status === 'initiate' || data.status === 'download') {
-        onProgress({ stage: 'download', pct: 0, file: data.file });
+      const file = data.file || data.name || '';
+      const status = data.status;
+      if (status === 'progress' && typeof data.progress === 'number') {
+        onProgress({ stage: 'download', pct: data.progress, file, message: `Downloading ${file}… ${Math.round(data.progress)}%` });
+      } else if (status === 'ready' || status === 'done') {
+        onProgress({ stage: 'ready', pct: 100, message: 'Ready' });
+      } else if (status === 'initiate') {
+        onProgress({ stage: 'download', pct: 0, file, message: `Starting ${file || 'download'}…` });
+      } else if (status === 'download') {
+        onProgress({ stage: 'download', pct: 0, file, message: `Fetching ${file || 'model'}…` });
       }
     },
   });
