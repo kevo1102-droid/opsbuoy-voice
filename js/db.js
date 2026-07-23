@@ -1,6 +1,7 @@
 const DB_NAME = 'opsbuoy-voice';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'notes';
+const RECOVERY_STORE = 'active_session';
 
 let _dbPromise = null;
 
@@ -14,6 +15,9 @@ function openDb() {
         const s = db.createObjectStore(STORE, { keyPath: 'id' });
         s.createIndex('createdAt', 'createdAt');
       }
+      if (!db.objectStoreNames.contains(RECOVERY_STORE)) {
+        db.createObjectStore(RECOVERY_STORE, { keyPath: 'index' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -21,8 +25,8 @@ function openDb() {
   return _dbPromise;
 }
 
-function tx(mode) {
-  return openDb().then((db) => db.transaction(STORE, mode).objectStore(STORE));
+function tx(mode, storeName = STORE) {
+  return openDb().then((db) => db.transaction(storeName, mode).objectStore(storeName));
 }
 
 export async function addNote(note) {
@@ -95,4 +99,37 @@ export async function estimateUsage() {
   if (!navigator.storage?.estimate) return null;
   const { usage = 0, quota = 0 } = await navigator.storage.estimate();
   return { usage, quota };
+}
+
+// --- Recovery store (in-progress long-recording chunks) --------------------
+
+export async function saveActiveChunk(index, blob, transcript, sessionId, mimeType) {
+  const store = await tx('readwrite', RECOVERY_STORE);
+  return new Promise((resolve, reject) => {
+    const r = store.put({ index, blob, transcript: transcript || '', sessionId, mimeType, savedAt: Date.now() });
+    r.onsuccess = () => resolve();
+    r.onerror = () => reject(r.error);
+  });
+}
+
+export async function loadActiveChunks() {
+  const store = await tx('readonly', RECOVERY_STORE);
+  return new Promise((resolve, reject) => {
+    const out = [];
+    const req = store.openCursor();
+    req.onsuccess = (e) => {
+      const c = e.target.result;
+      if (c) { out.push(c.value); c.continue(); } else resolve(out.sort((a, b) => a.index - b.index));
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function clearActiveChunks() {
+  const store = await tx('readwrite', RECOVERY_STORE);
+  return new Promise((resolve, reject) => {
+    const r = store.clear();
+    r.onsuccess = () => resolve();
+    r.onerror = () => reject(r.error);
+  });
 }

@@ -1,4 +1,5 @@
-import { addNote, allNotes, getNote, updateNote, deleteNote, clearAll, estimateUsage } from './db.js';
+import { addNote, allNotes, getNote, updateNote, deleteNote, clearAll, estimateUsage,
+         saveActiveChunk, loadActiveChunks, clearActiveChunks } from './db.js';
 import { Recorder } from './recorder.js';
 import { transcribe, preloadModel, getModelName, setModelName } from './transcribe.js';
 import { summarize, getKey, setKey, loadWebllm, isWebllmReady, listProviders } from './summarize.js';
@@ -15,7 +16,7 @@ let searchQuery = '';
 let cachedNotes = [];
 
 // Long-recording session state
-let longSession = null; // { chunks: [], transcripts: [], startedAt, pending: number }
+let longSession = null; // { chunks, transcripts, startedAt, pending, failed, lastError, sessionId, wakeLock }
 
 function showView(name) {
   Object.entries(views).forEach(([k, el]) => el.classList.toggle('active', k === name));
@@ -187,7 +188,26 @@ async function startRecording({ long = false } = {}) {
     return;
   }
   recorder = new Recorder();
-  longSession = long ? { chunks: [], transcripts: [], startedAt: Date.now(), pending: 0, failed: 0, lastError: '' } : null;
+  longSession = long ? {
+    chunks: [], transcripts: [],
+    startedAt: Date.now(), pending: 0, failed: 0, lastError: '',
+    sessionId: crypto.randomUUID(),
+    wakeLock: null,
+  } : null;
+
+  // Long-mode reliability:
+  // 1. Wake-lock the screen so Chrome doesn't freeze the tab on lock/dim
+  // 2. Clear any leftover chunks from a prior aborted session
+  if (long) {
+    try {
+      if ('wakeLock' in navigator) {
+        longSession.wakeLock = await navigator.wakeLock.request('screen');
+      }
+    } catch (e) {
+      console.warn('[wakeLock]', e);
+    }
+    await clearActiveChunks();
+  }
 
   try {
     await recorder.start(long ? {
@@ -227,10 +247,25 @@ async function handleLongChunk({ index, blob, mimeType, final }) {
   longSession.chunks.push(blob);
   longSession.pending++;
   $('#record-chunk-count').textContent = `${longSession.chunks.length - longSession.pending}/${longSession.chunks.length}`;
+
+  // Persist raw audio IMMEDIATELY — if the tab dies mid-transcription,
+  // recovery reads chunks straight from IndexedDB.
+  try {
+    await saveActiveChunk(index, blob, '', longSession.sessionId, mimeType);
+  } catch (e) {
+    console.error('[chunk persist]', e);
+  }
+
   try {
     const text = await transcribe(blob);
     longSession.transcripts[index] = text || '';
     if (!text) longSession.failed++;
+    // Update the persisted chunk with its transcript so recovery has both.
+    try {
+      await saveActiveChunk(index, blob, text || '', longSession.sessionId, mimeType);
+    } catch (e) {
+      console.error('[chunk persist tx]', e);
+    }
   } catch (e) {
     console.error('[long chunk transcribe]', e);
     longSession.transcripts[index] = '';
@@ -284,6 +319,8 @@ async function stopRecording() {
       if (!transcript && longSession.failed > 0) {
         errorMessage = `${longSession.failed}/${longSession.chunks.length} chunks failed. Last error: ${longSession.lastError || '(unknown)'}`;
       }
+      try { await longSession.wakeLock?.release(); } catch {}
+      await clearActiveChunks();
       longSession = null;
     } else {
       transcript = await Promise.race([
@@ -329,13 +366,17 @@ async function stopRecording() {
   toast('Saved.');
 }
 
-function cancelRecording() {
+async function cancelRecording() {
   if (!recorder) return;
   clearInterval(timerInterval);
   cancelAnimationFrame(vizRaf);
   recorder.cancel();
   recorder = null;
-  longSession = null;
+  if (longSession) {
+    try { await longSession.wakeLock?.release(); } catch {}
+    await clearActiveChunks();
+    longSession = null;
+  }
   showView('list');
 }
 
@@ -945,11 +986,45 @@ function init() {
   });
 
   renderList();
+  recoverAbandonedSession();
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
+  }
+}
+
+// On boot, check if a long-recording session was interrupted (tab killed,
+// browser closed, phone lock, etc). If we find chunks left over, recover
+// them into a note so audio + partial transcript aren't lost.
+async function recoverAbandonedSession() {
+  try {
+    const chunks = await loadActiveChunks();
+    if (chunks.length === 0) return;
+    if (!confirm(`Recover ${chunks.length} chunk(s) from an interrupted recording?\n\nCancel discards them.`)) {
+      await clearActiveChunks();
+      return;
+    }
+    const mimeType = chunks[0].mimeType || 'audio/webm';
+    const blob = new Blob(chunks.map((c) => c.blob), { type: mimeType });
+    const transcript = chunks.map((c) => c.transcript || '').filter(Boolean).join(' ').trim();
+    const untranscribed = chunks.filter((c) => !c.transcript).length;
+    const note = {
+      id: crypto.randomUUID(),
+      title: transcript ? derivedTitle(transcript) : 'Recovered recording',
+      transcript: transcript || `[recovered from interrupted session — ${untranscribed} chunk(s) not transcribed]`,
+      audioBlob: blob,
+      mimeType,
+      duration: chunks.length * 30,
+      createdAt: Date.now(),
+    };
+    await addNote(note);
+    await clearActiveChunks();
+    await renderList();
+    toast(`Recovered ${chunks.length} chunk(s) into a new note.`, 5000);
+  } catch (e) {
+    console.error('[recovery]', e);
   }
 }
 
